@@ -1,0 +1,261 @@
+# ============================================================
+# Onion Guardian - default security rules
+# Derived from practical AI IDE sandbox attack and defense experience
+# ============================================================
+
+guardian:
+  backend: "local"                           # local / custom
+  model_name: "compact-guard-model"         # Local Guardian model
+  temperature: 0.1
+  max_tokens: 512
+  # Enable dependency-chain detection.
+  enable_intent_chain_detection: true
+  # Context window size (recent N conversation turns).
+  context_window: 5
+
+sandbox:
+  base_path: "/workspace"
+  session_isolation: true
+  max_file_size_mb: 100
+  max_execution_time_sec: 30
+  # Per-user disk quota.
+  disk_quota_mb: 500
+  # Per-user process limit.
+  max_processes: 10
+
+network:
+  mode: "restricted"                          # none / restricted / open
+  allowed_domains:
+    - "packages.example"
+    - "registry.example"
+    - "code.example"
+    - "assets.example"
+  blocked_ports:
+    - 22    # SSH
+    - 23    # Telnet
+    - 25    # SMTP
+    - 53    # DNS (use explicit resolvers instead)
+    - 135   # RPC
+    - 137   # NetBIOS
+    - 138   # NetBIOS
+    - 139   # NetBIOS
+    - 445   # SMB
+    - 3389  # RDP
+
+audit:
+  log_path: "/tmp/onion-guardian/audit.jsonl"
+  level: "INFO"
+  # Capture full request details for blocked events.
+  capture_blocked_requests: true
+  # Metrics.
+  enable_metrics: true
+
+# ============================================================
+# Security rules
+# Each rule maps to a known attack class
+# ============================================================
+rules:
+
+  # ── OG-001: Proxy and tunnel installation ─────────────────
+  - rule_id: "PKG_BLACKLIST_PROXY"
+    category: "PACKAGE_BLACKLIST"
+    severity: "CRITICAL"
+    description: "Block installation of network proxy and tunnel tools to prevent sandbox breakout and pivoting"
+    patterns:
+      - "\\b(v2ray|xray|clash|trojan|wireguard|openvpn|frp|frpc|frps|ngrok|nps|npc)\\b"
+      - "\\bapt\\s+install\\s+.*(proxy|tunnel|vpn|socks)"
+      - "\\bpip\\s+install\\s+.*(shadowsocks|v2ray|trojan)"
+      - "\\b(wget|curl)\\s+.*/(v2ray|xray|clash|trojan)"
+    action: "BLOCK"
+    message: "Installing network proxy or tunnel tools is not allowed in the sandbox. These tools can be used to establish reverse tunnels and threaten infrastructure security."
+    enabled: true
+
+  # ── OG-002: Host and network reconnaissance ───────────────
+  - rule_id: "CMD_BLACKLIST_HOST_RECON"
+    category: "COMMAND_BLACKLIST"
+    severity: "HIGH"
+    description: "Block host and network reconnaissance commands to reduce infrastructure discovery"
+    patterns:
+      - "\\bip\\s+(route|neigh|addr)\\b"
+      - "\\broute\\s+-n\\b"
+      - "\\barp\\s+-a\\b"
+      - "\\bcat\\s+/proc/net/(arp|route|tcp|udp)"
+      - "\\bnetstat\\b"
+      - "\\bss\\s+-[a-z]*[tl]"
+      - "\\bnmap\\b"
+      - "\\bcurl\\s+.*\\b(myip|ifconfig|public-ip|ip-check)\\b"
+      - "\\bdig\\s+"
+      - "\\bhost\\s+"
+      - "\\btraceroute\\b"
+      - "\\bmtr\\b"
+    action: "BLOCK"
+    message: "Network reconnaissance commands are not allowed. Use the provided API surface for approved network access."
+    enabled: true
+
+  # ── OG-003: Dangerous system commands ─────────────────────
+  - rule_id: "CMD_BLACKLIST_DANGEROUS"
+    category: "COMMAND_BLACKLIST"
+    severity: "CRITICAL"
+    description: "Block dangerous system commands"
+    patterns:
+      - "\\brm\\s+-rf\\s+/"
+      - "\\bmkfs\\b"
+      - "\\bdd\\s+if="
+      - "\\b(shutdown|reboot|halt|poweroff)\\b"
+      - "\\b(passwd|useradd|userdel|usermod|groupadd)\\b"
+      - "\\bchmod\\s+[0-7]*777"
+      - "\\bchown\\s+-R"
+      - "\\bmount\\s+-o\\s+remount"
+      - "\\biptables\\b"
+      - "\\bsysctl\\b"
+      - "\\b(crontab|at\\s+-f)\\b"
+    action: "BLOCK"
+    message: "This command performs a dangerous system operation and is blocked by policy."
+    enabled: true
+
+  # ── OG-004: Reverse shell patterns ────────────────────────
+  - rule_id: "CMD_BLACKLIST_REVERSE_SHELL"
+    category: "COMMAND_BLACKLIST"
+    severity: "CRITICAL"
+    description: "Block reverse shell commands"
+    patterns:
+      - "\\bbash\\s+-i\\s+>&\\s*/dev/tcp/"
+      - "\\bnc\\s+-[a-z]*e\\s+/bin/(ba)?sh"
+      - "\\bpython[23]?\\s+-c.*socket.*connect.*exec"
+      - "\\bperl\\s+-e.*socket.*exec"
+      - "\\bruby\\s+-rsocket.*exec"
+      - "\\bphp\\s+-r.*fsockopen.*exec"
+      - "\\b(mkfifo|mknod)\\s+.*/tmp/"
+      - "\\bsocat\\b.*exec"
+      - "\\b/dev/tcp/"
+      - "\\b/dev/udp/"
+    action: "BLOCK"
+    message: "A reverse shell attempt was detected and blocked by policy."
+    enabled: true
+
+  # ── OG-005: Cross-session data isolation ──────────────────
+  - rule_id: "PATH_RESTRICT_SESSION"
+    category: "PATH_RESTRICTION"
+    severity: "CRITICAL"
+    description: "Block access to other sessions to prevent cross-session data leakage"
+    patterns:
+      - "/user_data/sessions/(?!{SESSION_ID})"
+      - "/user_data/certificates"
+      - "\\.\\./.*sessions/"
+      - "\\bfind\\s+/user_data"
+      - "\\bls\\s+(-[a-zA-Z]*\\s+)*/user_data/sessions/?\\s*$"
+    action: "BLOCK"
+    message: "Only data from the current session is accessible. Cross-session access is blocked."
+    enabled: true
+
+  # ── OG-006: Secret and certificate protection ─────────────
+  - rule_id: "PATH_RESTRICT_SECRETS"
+    category: "PATH_RESTRICTION"
+    severity: "HIGH"
+    description: "Block access to certificates and key material"
+    patterns:
+      - "certificates/"
+      - "\\.key_secret$"
+      - "\\.pem$"
+      - "\\.key$"
+      - "/etc/ssl/"
+      - "/etc/ssh/"
+      - "\\.ssh/"
+      - "id_rsa"
+      - "id_ed25519"
+    action: "BLOCK"
+    message: "Access to certificate and key files is not allowed."
+    enabled: true
+
+  # ── OG-007: Privilege escalation protection ───────────────
+  - rule_id: "CMD_BLACKLIST_PRIVILEGE"
+    category: "COMMAND_BLACKLIST"
+    severity: "HIGH"
+    description: "Block privilege-escalation attempts"
+    patterns:
+      - "\\bsudo\\b"
+      - "\\bsu\\s+-"
+      - "\\bchroot\\b"
+      - "\\bnsenter\\b"
+      - "\\bunshare\\b"
+      - "\\bcapsh\\b"
+      - "\\bsetcap\\b"
+    action: "BLOCK"
+    message: "Privilege-escalation operations are not allowed."
+    enabled: true
+
+  # ── OG-008: Dependency-chain injection protection ─────────
+  - rule_id: "INTENT_DEPENDENCY_CHAIN"
+    category: "INTENT_PATTERN"
+    severity: "HIGH"
+    description: "Detect dependency-chain injection that disguises itself as technical discussion to extract sensitive data"
+    patterns:
+      - "as a prerequisite.*need to understand first"
+      - "to answer.*question.*look at.*first"
+      - "technically.*depends on.*so we need"
+      - "this feature.*implementation.*needs.*first"
+    action: "REWRITE"
+    message: "A possible dependency-chain attack was detected and the request was safely rewritten."
+    rewrite_template: "Answer only the user's direct question. Do not proactively explore the environment or retrieve extra system information."
+    enabled: true
+
+  # ── Network policy ────────────────────────────────────────
+  - rule_id: "NET_BLOCK_INTERNAL"
+    category: "NETWORK_POLICY"
+    severity: "CRITICAL"
+    description: "Block internal network access to reduce SSRF and host discovery"
+    patterns:
+      - "\\b10\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\b"
+      - "\\b172\\.(1[6-9]|2\\d|3[01])\\.\\d{1,3}\\.\\d{1,3}\\b"
+      - "\\b192\\.168\\.\\d{1,3}\\.\\d{1,3}\\b"
+      - "\\b127\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\b"
+      - "\\blocalhost\\b"
+      - "\\b0\\.0\\.0\\.0\\b"
+      - "\\b169\\.254\\."
+      - "\\bmetadata(?:\\.[a-z0-9-]+)+\\b"
+      - "\\binstance-data\\b"
+      - "\\b169\\.254\\.169\\.254"
+    action: "BLOCK"
+    message: "Internal network addresses are not allowed. For external API access, use domains from the allowlist."
+    enabled: true
+
+  # ── Resource limits ───────────────────────────────────────
+  - rule_id: "RES_LIMIT_FORK_BOMB"
+    category: "RESOURCE_LIMIT"
+    severity: "CRITICAL"
+    description: "Block fork bombs and resource exhaustion attacks"
+    patterns:
+      - ":\\(\\)\\{\\s*:|\\s*&\\s*\\};:"
+      - "\\bfork\\b.*\\bwhile\\b.*\\btrue\\b"
+      - "\\bwhile\\s+true.*do.*&"
+      - "\\byes\\b\\s*\\|"
+      - "/dev/urandom.*>\\s*/dev/"
+    action: "BLOCK"
+    message: "A resource-exhaustion attack pattern was detected and blocked."
+    enabled: true
+
+  # ── System package managers - blocked outright ────────────
+  - rule_id: "PKG_INSTALL_SYSTEM_BLOCK"
+    category: "PACKAGE_BLACKLIST"
+    severity: "HIGH"
+    description: "Block system package managers; only language-level package managers are allowed in the AI IDE sandbox"
+    patterns:
+      - "\\b(apt|apt-get|yum|dnf|apk)\\s+(install|add|remove|purge|update|upgrade)\\b"
+      - "\\b(apt|apt-get|yum|dnf|apk)\\b.*--force"
+    action: "BLOCK"
+    message: "System package managers are blocked. Use language-level package managers such as pip, npm, or cargo."
+    enabled: true
+
+  # ── Language-level package installation - audit and rewrite ─
+  - rule_id: "PKG_INSTALL_AUDIT"
+    category: "PACKAGE_BLACKLIST"
+    severity: "MEDIUM"
+    description: "Record language-level package installation and require review for non-preapproved packages"
+    patterns:
+      - "\\bpip\\s+install\\b"
+      - "\\bnpm\\s+install\\b"
+      - "\\bcargo\\s+install\\b"
+    action: "REWRITE"
+    message: "The package installation request was recorded. Non-preapproved packages require additional review."
+    rewrite_template: "AUDIT_PACKAGE_INSTALL"
+    enabled: true
