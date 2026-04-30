@@ -256,7 +256,7 @@ Common local commands:
 
 ```bash
 python -m pytest -q
-python -m build --sdist --wheel --no-isolation
+python -m build --sdist --wheel
 python examples/user_smoke_suite.py
 ```
 
