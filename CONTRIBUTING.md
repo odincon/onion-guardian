@@ -41,7 +41,7 @@ python -m pytest -q
 Build packages:
 
 ```bash
-python -m build --sdist --wheel --no-isolation
+python -m build --sdist --wheel 
 ```
 
 ## Contribution Guidelines
